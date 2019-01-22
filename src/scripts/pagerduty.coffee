@@ -43,7 +43,6 @@ async = require('async')
 inspect = require('util').inspect
 moment = require('moment-timezone')
 request = require 'request'
-Scrolls = require('../../../../lib/scrolls').context({script: 'pagerduty'})
 
 pagerDutyUserEmail     = process.env.HUBOT_PAGERDUTY_USERNAME
 pagerDutyServiceApiKey = process.env.HUBOT_PAGERDUTY_SERVICE_API_KEY
@@ -55,13 +54,11 @@ module.exports = (robot) ->
     if pagerduty.missingEnvironmentForApi(msg)
       return
 
-    hubotUser = robot.getUserBySlackUser(msg.message.user)
-
-    campfireUserToPagerDutyUser msg, hubotUser, (user) ->
-      emailNote = if hubotUser.pagerdutyEmail
-                    "You've told me your PagerDuty email is #{hubotUser.pagerdutyEmail}"
-                  else if hubotUser.email_address
-                    "I'm assuming your PagerDuty email is #{hubotUser.email_address}. Change it with `#{robot.name} pager me as you@yourdomain.com`"
+    campfireUserToPagerDutyUser msg, msg.message.user, (user) ->
+      emailNote = if msg.message.user.pagerdutyEmail
+                    "You've told me your PagerDuty email is #{msg.message.user.pagerdutyEmail}"
+                  else if msg.message.user.email_address
+                    "I'm assuming your PagerDuty email is #{msg.message.user.email_address}. Change it with `#{robot.name} pager me as you@yourdomain.com`"
       if user
         msg.send "I found your PagerDuty user #{user.html_url}, #{emailNote}"
       else
@@ -73,15 +70,13 @@ module.exports = (robot) ->
 
   # hubot pager me as <email> - remember your pager email is <email>
   robot.respond /pager(?: me)? as (.*)$/i, (msg) ->
-    hubotUser = robot.getUserBySlackUser(msg.message.user)
     email = msg.match[1]
-    hubotUser.pagerdutyEmail = email
+    msg.message.user.pagerdutyEmail = email
     msg.send "Okay, I'll remember your PagerDuty email is #{email}"
 
   # hubot pager forget me - forget your pager email
   robot.respond /pager forget me$/i, (msg) ->
-    hubotUser = robot.getUserBySlackUser(msg.message.user)
-    hubotUser.pagerdutyEmail = undefined
+    msg.message.user.pagerdutyEmail = undefined
     msg.send "Okay, I've forgotten your PagerDuty email"
 
   # hubot pager incident <incident> - return the incident NNN
@@ -135,8 +130,7 @@ module.exports = (robot) ->
     if pagerduty.missingEnvironmentForApi(msg)
       return
 
-    hubotUser = robot.getUserBySlackUser(msg.message.user)
-    fromUserName   = hubotUser.name
+    fromUserName   = msg.message.user.name
     query          = msg.match[3]
     severity       = msg.match[4]
     reason         = msg.match[5]
@@ -148,11 +142,11 @@ module.exports = (robot) ->
       return
 
     # Figure out who we are
-    campfireUserToPagerDutyUser msg, hubotUser, false, (triggeredByPagerDutyUser) ->
+    campfireUserToPagerDutyUser msg, msg.message.user, false, (triggeredByPagerDutyUser) ->
       triggeredByPagerDutyUserEmail = if triggeredByPagerDutyUser?
                                         emailForUser(triggeredByPagerDutyUser)
                                       else if pagerDutyUserEmail
-                                        pagerDutyUserEmail   
+                                        pagerDutyUserEmail
       unless triggeredByPagerDutyUserEmail
         msg.send "Sorry, I can't figure your PagerDuty account, and I don't have my own :( Can you tell me your PagerDuty email with `#{robot.name} pager me as you@yourdomain.com`?"
         return
@@ -178,14 +172,14 @@ module.exports = (robot) ->
               if err?
                 robot.emit 'error', err, msg
                 return
-              
+
               if json?.incidents.length == 0
                 msg.reply "Couldn't find the incident we just created to reassign. Please try again :/"
                 return
 
               incident = json.incidents[0]
               data = {"type": "incident_reference"}
-              
+
               if results.assigned_to_user?
                 data['assignments'] = [{"assignee": {"id": results.assigned_to_user, "type": "user_reference"}}]
               if results.escalation_policy?
@@ -224,8 +218,6 @@ module.exports = (robot) ->
     if pagerduty.missingEnvironmentForApi(msg)
       return
 
-    hubotUser = robot.getUserBySlackUser(msg.message.user)
-
     force = msg.match[4]?
 
     pagerduty.getIncidents 'triggered,acknowledged', (err, incidents) ->
@@ -233,13 +225,13 @@ module.exports = (robot) ->
         robot.emit 'error', err, msg
         return
 
-      email  = emailForUser(hubotUser)
+      email  = msg.message.user.pagerdutyEmail || msg.message.user.email_address
       incidentsForEmail incidents, email, (err, filteredIncidents) ->
-        if err? 
-          msg.send err.message 
+        if err?
+          msg.send err.message
           return
-        
-        if force 
+
+        if force
           filteredIncidents = incidents
 
         if filteredIncidents.length is 0
@@ -274,23 +266,21 @@ module.exports = (robot) ->
     if pagerduty.missingEnvironmentForApi(msg)
       return
 
-    hubotUser = robot.getUserBySlackUser(msg.message.user)
-
     force = msg.match[5]?
     pagerduty.getIncidents "acknowledged", (err, incidents) ->
       if err?
         robot.emit 'error', err, msg
         return
-      
-      email  = emailForUser(hubotUser)
+
+      email  = msg.message.user.pagerdutyEmail || msg.message.user.email_address
       incidentsForEmail incidents, email, (err, filteredIncidents) ->
-        if err? 
+        if err?
           robot.emit 'error', err, msg
           return
 
-        if force 
+        if force
           filteredIncidents = incidents
-        
+
         if filteredIncidents.length is 0
           # nothing assigned to the user, but there were others
           if incidents.length > 0 and not force
@@ -320,7 +310,7 @@ module.exports = (robot) ->
       buffer = ""
       for note in json.notes
         buffer += "#{note.created_at} #{note.user.summary}: #{note.content}\n"
-      if not buffer 
+      if not buffer
         buffer = "No notes!"
       msg.send buffer
 
@@ -328,15 +318,13 @@ module.exports = (robot) ->
   robot.respond /(pager|major)( me)? note ([\d\w]+) (.+)$/i, (msg) ->
     msg.finish()
 
-    hubotUser = robot.getUserBySlackUser(msg.message.user)
-
     if pagerduty.missingEnvironmentForApi(msg)
       return
 
     incidentId = msg.match[3]
     content = msg.match[4]
 
-    campfireUserToPagerDutyUser msg, hubotUser, (user) ->
+    campfireUserToPagerDutyUser msg, msg.message.user, (user) ->
       userEmail = emailForUser(user)
       return unless userEmail
 
@@ -398,7 +386,7 @@ module.exports = (robot) ->
       since: moment().format(),
       until: moment().add(30, 'days').format()
     }
-      
+
     if !msg.match[5]
       msg.reply "Please specify a schedule with 'pager #{msg.match[3]} <name>.'' Use 'pager schedules' to list all schedules."
       return
@@ -444,16 +432,14 @@ module.exports = (robot) ->
     if pagerduty.missingEnvironmentForApi(msg)
       return
 
-    hubotUser = robot.getUserBySlackUser(msg.message.user)
-
-    campfireUserToPagerDutyUser msg, hubotUser, (user) ->
+    campfireUserToPagerDutyUser msg, msg.message.user, (user) ->
       userId = user.id
 
       if msg.match[4]
         timezone = msg.match[4]
       else
         timezone = 'UTC'
-        
+
       query = {
         since: moment().format(),
         until: moment().add(30, 'days').format(),
@@ -484,7 +470,7 @@ module.exports = (robot) ->
         msg.send "Sorry, I don't seem to know who that is. Are you sure they are in chat?"
         return
     else
-      overrideUser = robot.getUserBySlackUser(msg.message.user)
+      overrideUser = msg.message.user
 
     campfireUserToPagerDutyUser msg, overrideUser, (user) ->
       userId = user.id
@@ -553,9 +539,7 @@ module.exports = (robot) ->
     if pagerduty.missingEnvironmentForApi(msg)
       return
 
-    hubotUser = robot.getUserBySlackUser(msg.message.user)
-
-    campfireUserToPagerDutyUser msg, hubotUser, (user) ->
+    campfireUserToPagerDutyUser msg, msg.message.user, (user) ->
 
       userId = user.id
       unless userId
@@ -575,7 +559,7 @@ module.exports = (robot) ->
         override  = {
           'start': start,
           'end':   end,
-          'user':  { 
+          'user':  {
             'id':   userId,
             "type": "user_reference",
           },
@@ -601,7 +585,7 @@ module.exports = (robot) ->
               if err?
                 robot.emit 'error', err, msg
                 return
-              
+
               msg.send "Rejoice, @#{old_username}! @#{user.name} has the pager on #{schedule.name} until #{end.format()}"
 
   # hubot Am I on call - return if I'm currently on call or not
@@ -611,16 +595,14 @@ module.exports = (robot) ->
 
     msg.send "Finding schedules, this may take a few seconds..."
 
-    hubotUser = robot.getUserBySlackUser(msg.message.user)
-
-    campfireUserToPagerDutyUser msg, hubotUser, (user) ->
+    campfireUserToPagerDutyUser msg, msg.message.user, (user) ->
       userId = user.id
 
       renderSchedule = (s, cb) ->
         if not memberOfSchedule(s, userId)
           cb(null, {member: false})
-          return 
-        
+          return
+
         withCurrentOncallId msg, s, (err, oncallUserid, oncallUsername, schedule) ->
           if err?
             cb(err)
@@ -643,7 +625,7 @@ module.exports = (robot) ->
         if schedules.length == 0
           msg.send 'No schedules found!'
           return
-        
+
         if (schedules.every (s) -> not memberOfSchedule(s, userId))
           msg.send "You are not assigned to any schedules"
           return
@@ -673,7 +655,6 @@ module.exports = (robot) ->
           cb(err)
           return
 
-        Scrolls.log("info", {at: 'who-is-on-call/renderSchedule', schedule: schedule.name, username: user.name})
         if !pagerEnabledForScheduleOrEscalation(schedule) || user.name == "hubot" || user.name == undefined
           cb(null, undefined)
           return
@@ -702,12 +683,10 @@ module.exports = (robot) ->
 
       async.map schedules, renderSchedule, (err, results) ->
         if err?
-          Scrolls.log("error", {at: 'who-is-on-call/map-schedules/error', error: err})
           robot.emit 'error', err, msg
           return
 
         results = (result for result in results when result?)
-        Scrolls.log("info", {at: 'who-is-on-call/map-schedules'})
         for chunk in chunkMessageLines(results, 7000)
           msg.send chunk.join("\n")
 
@@ -739,9 +718,7 @@ module.exports = (robot) ->
     if pagerduty.missingEnvironmentForApi(msg)
       return
 
-    hubotUser = robot.getUserBySlackUser(msg.message.user)
-
-    campfireUserToPagerDutyUser msg, hubotUser, (user) ->
+    campfireUserToPagerDutyUser msg, msg.message.user, (user) ->
       requesterEmail = emailForUser(user)
       unless requesterEmail
         return
@@ -1013,9 +990,9 @@ module.exports = (robot) ->
 
     if names
       assigned_to = "- assigned to #{names.join(",")}"
-    else 
+    else
       assigned_to = "- nobody currently assigned"
-    
+
     "#{inc.incident_number}: #{inc.created_at} #{summary} #{assigned_to}\n"
 
   updateIncidents = (msg, incidentNumbers, statusFilter, updatedStatus) ->
@@ -1090,10 +1067,10 @@ module.exports = (robot) ->
 
   incidentsForEmail = (incidents, userEmail, cb) ->
     allUserEmails (err, userEmails) ->
-      if err? 
+      if err?
         cb(err)
-        return 
-      
+        return
+
       filtered = []
       for incident in incidents
         for assignment in incident.assignments
@@ -1109,14 +1086,14 @@ module.exports = (robot) ->
   formatOncalls = (oncalls, timezone) ->
     buffer = ""
     schedules = {}
-    for oncall in oncalls 
+    for oncall in oncalls
       startTime = moment(oncall.start).tz(timezone).format()
       endTime   = moment(oncall.end).tz(timezone).format()
       time      = "#{startTime} - #{endTime}"
       username  = guessSlackHandleFromEmail(oncall.user) || oncall.user.summary
       if oncall.schedule?
         scheduleId = oncall.schedule.id
-        if scheduleId not of schedules 
+        if scheduleId not of schedules
           schedules[scheduleId] = []
         if time not in schedules[scheduleId]
           schedules[scheduleId].push time
@@ -1126,7 +1103,7 @@ module.exports = (robot) ->
         epSummary = oncall.escalation_policy.summary
         epURL = oncall.escalation_policy.html_url
         buffer += "• #{time} #{username} (<#{epURL}|#{epSummary}>)\n"
-      else 
+      else
         # override
         buffer += "• #{time} #{username}\n"
     buffer
